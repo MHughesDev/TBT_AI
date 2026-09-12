@@ -1,0 +1,4 @@
+Quote #,Tank Name,Due Date,Country,State,Diameter (ft),Height (ft),Freeboard (in),Quantity,Material,Use Type,Deck Style,Floor Style,Wage Type,Bid Type,Miles to Site (From TBT),Ss,S1
+SAMPLE-001,Tank A,09/01/2026,US,MO,32,30,6,1,CS,Fire Protection Storage Tank,2:12 Roof (Comp/Tension Ring - 2 inch Rise to 12 inch Run),Flat Steel Floor,Non-Union / Non-Prevailing,Firm,150,0.12,0.07
+SAMPLE-002,Tank B,09/01/2026,US,TX,48,40,6,2,CS,Waste Water Storage Tank,Open-Top,Embedded Ring,Prevailing Wage,Firm,300,0.09,0.05
+SAMPLE-003,Tank C,09/01/2026,US,IA,24,24,6,1,304SS,Industrial Storage Tank,Flat Roof,Flat Steel Floor,Non-Union / Non-Prevailing,Budget,200,0.06,0.04

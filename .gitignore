@@ -1,0 +1,21 @@
+# Trained model — 39 MB, regenerate with `python tbt_model.py train <csv> --fast`
+# Keeping binaries out of git is deliberate: the model is a build artifact, it
+# changes on every monthly retrain, and it would bloat history fast. If you want
+# it versioned, use Git LFS or push it to blob storage and record the hash.
+*.joblib
+
+# Data — the archive contains customer names and pricing. Do not commit it.
+*.csv
+!sample_input.csv
+
+# Generated outputs
+audit*.xlsx
+scored*.xlsx
+*.log
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.DS_Store
+.ipynb_checkpoints/
