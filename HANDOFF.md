@@ -10,8 +10,20 @@ A pricing model for TBT steel tanks. Given specs (diameter, height, material,
 deck/floor style, use type, location, wage type, seismic, mileage) it predicts
 what TBT would quote. It is a **check on human estimators, not a replacement**.
 
-Current accuracy: **8.7% mean absolute error, 6.1% median**, measured by
+Current accuracy: **8.5% mean absolute error, 5.9% median**, measured by
 retraining each quarter on prior data and scoring the next quarter.
+
+**Retrain monthly.** Never-retrain 9.99% / quarterly 9.28% / monthly 8.69% mean.
+That 1.3-point gap is bigger than every modelling change in this project combined,
+and it costs two minutes of CPU. If only one thing from this handoff gets done,
+make it this.
+
+**The central design rule: the model prices scope, it does not guess scope.**
+Whether a quote includes erection, insulation, freight or tax is a commercial
+decision the estimator knows at quote time. `predict()` raises `ScopeError` if any
+of the five scope answers is missing. Do not add a default. Do not reintroduce a
+classifier. v3 had four of them and they were deleted on principle, at no cost to
+accuracy — see `DESIGN.md` §27.
 
 Read `README.md` for how to run it, `DESIGN.md` for the full technical record
 including everything that was tried and failed.
@@ -33,12 +45,14 @@ including everything that was tried and failed.
 Six gradient-boosted regressors, one per price component (Material, Fabrication,
 Construction, Insulation Material, Insulation Construction, Freight), each fitted
 on `log(component)` over rows where that component is present. Each sits on a ridge
-log-log backbone in `[log D, log H, log D × log H, t, material]` so it can
-extrapolate past the largest tank it has seen — the tree learns only the residual.
-Four hurdle classifiers decide scope when the estimator has not supplied it. Tax is
-a state-rate lookup, never modelled. The final estimate blends 70% component-sum
-with 30% a direct whole-price model of the same form. Conformal bands from a
-grouped holdout.
+log-log backbone in `[log D, log H, log D × log H, t]` so it can extrapolate past
+the largest tank it has seen — the tree learns only the residual. Scope arrives as
+five explicit yes/no columns; nothing is inferred. Tax is a state-rate lookup gated
+by `IS_TAXABLE`. The final estimate blends 70% component-sum with 30% a direct
+whole-price model of the same form. Conformal bands from a grouped holdout.
+
+14 fitted estimators in one bundle (`tbt_pricing_bundle.joblib`): six components ×
+(Ridge + GBM), plus the direct model × (Ridge + GBM).
 
 ---
 
@@ -55,11 +69,20 @@ evaluation only, which measures the model more kindly without making it better. 
 gate is `$20 ≤ Total Price / shell_area ≤ 250`; 173 rows fail it, mostly partial
 quotes missing scope lines.
 
-**3. Presence classifiers must not see the scope flags.** They predict those flags.
-If a blank flag reads as "no insulation," the classifier confirms it and the
-prediction is self-fulfilling. Hence two encoders (`encoder`, `encoder_nf`) and the
-two-stage `predict()`: resolve scope on the flag-free matrix, then price with flags
-set.
+**3. Do not infer scope.** v3 used classifiers for this and they created a
+self-fulfilling-prediction hazard that needed two encoders and a two-stage
+`predict()` to work around. v4 removes the question entirely: scope is an input.
+If someone proposes "just default freight to yes when it's blank," that is the same
+bug wearing a different hat. Blank means ask the estimator.
+
+**3b. `IS_INSULATION_ERECTION` implies `IS_INSULATION`.** 1,456 archive rows have
+both, 83 have supply only (customer installs), zero have erection alone. Enforced
+in `prepare_data.py` and `predict()`.
+
+**3c. `IS_TAXABLE` is not derivable from `State`.** Only 53% of US rows carry tax,
+and the share varies within states — Oregon 0%, Texas 38%, New Jersey 91%. That is
+customer exemption status. Geography sets the rate; the customer sets whether it
+applies.
 
 ### Leakage guard
 
@@ -175,11 +198,18 @@ it is wrong in a patterned way (tells you which column is missing). Both outcome
 are worth more than another tenth of a point of accuracy.
 **Done when:** 50 rows are adjudicated and categorised as model-wrong vs quote-wrong.
 
-### 3. Add three scope checkboxes to the quote sheet
-**Why:** erection / insulation / freight included. Worth ~2 points of accuracy
-(11.5% → 9.3% in the v2 tests) for three booleans. Cheapest win available.
-**Done when:** the flags are populated in the export and `predict()` is called with
-them.
+### 3. Capture the five scope answers at quote time — this is now a dependency
+**Why:** `prepare_data.py` currently backfills scope by asking whether a component
+carries a non-zero price. That is the right migration for 6,892 historical rows and
+the wrong thing to rely on going forward: **a blank price and a genuinely excluded
+scope look identical after the fact.** A quote where freight had not been filled in
+yet is indistinguishable from one where the customer collects. Only the estimator
+knows.
+
+Five Yes/No dropdowns: erection, insulation supply, insulation erection, freight,
+taxable. Five clicks, and they are the same five answers the model needs anyway.
+**Done when:** the fields exist in the quoting system and flow into the export, and
+`prepare_data.py` is left alone rather than run with `--force`.
 
 ### 4. Add a $/sq-ft gate to data entry
 **Why:** stops partial quotes entering the archive. 173 rows are currently
@@ -223,8 +253,16 @@ stale model degrades. `train --fast` is a 2-minute scheduled task.
 - **Dropping the 70/30 blend for pure component-sum.** Blend weights between 0.3
   and 0.8 all land within 0.2 points, so the exact number does not matter — but the
   blend is cheap insurance against one architecture failing on an unusual tank.
-- **Reporting the median.** 6.1% is real but flattering. The mean (8.7%) is what a
+- **Reporting the median.** 6.3% is real but flattering. The mean (8.7%) is what a
   portfolio experiences.
+- **Bringing back a scope classifier "just as a fallback for blanks."** This is the
+  single most likely regression. It will be proposed in good faith, it will test
+  well (AUC 0.91–0.99), and it reintroduces exactly the failure v4 exists to remove:
+  a confidently wrong scope silently changes the price with nothing visible on the
+  sheet to show it. A `#SCOPE` error is a feature. It costs one question and
+  prevents a wrong number going out the door.
+- **Defaulting `IS_TAXABLE` from `State`.** Same mistake in a different column. The
+  rate is geographic; the exemption is not.
 
 ---
 

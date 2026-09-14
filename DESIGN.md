@@ -835,3 +835,259 @@ investigate what changed.
 | `tbt_pricing_model.joblib` | Trained bundle. |
 | `audit_archive.xlsx` | Audit output on the current archive. |
 | `DESIGN.md` | This document. |
+
+---
+---
+
+# v4 — Scope Becomes an Input
+
+Supersedes the scope-inference parts of v3. Everything else in v3 stands.
+
+## 27. The change
+
+v3 carried four hurdle classifiers that predicted whether a quote included
+erection, insulation-supply, insulation-erection and freight. **v4 deletes them.**
+
+The objection is not that they performed badly — AUCs ran 0.91 to 0.99. It is that
+the question was wrong. Whether a customer bought insulation is a commercial
+decision made in the room. It is not a property of the tank, it is not derivable
+from diameter and height, and the estimator knows the answer before the model is
+ever called.
+
+A classifier here can only do two things: agree with something the estimator
+already knows, or be confidently wrong in a way that silently changes the price
+without changing anything visible on the sheet. The second failure mode is
+invisible precisely because the output still looks like a normal number.
+
+So scope now arrives as explicit columns and `predict()` raises `ScopeError` when
+they are absent. No defaults, no inference, no quiet fallback.
+
+### The columns
+
+| Column | Meaning | Archive share |
+|---|---|---|
+| `IS_CONSTRUCTION` | do we erect it | 68.2% |
+| `IS_INSULATION` | is insulation supplied | 22.6% |
+| `IS_INSULATION_ERECTION` | do we install the insulation | 21.4% |
+| `IS_FREIGHT` | do we ship it | 82.2% |
+| `IS_TAXABLE` | does sales tax apply to this customer | 37.4% |
+
+**Material and Fabrication get no column.** They are present on 6,679 of 6,679
+usable rows. They are processes, not options, and a flag that is always Yes is
+noise.
+
+### Two things the original spec did not cover
+
+**Insulation needs two flags, not one.** The components nest strictly: 1,456
+archive rows have both insulation supply and insulation erection, 83 have supply
+only (the customer installs it themselves), and **zero** have erection without
+supply. One flag would have forced those 83 supply-only jobs into the wrong shape.
+The nesting rule is enforced — `IS_INSULATION_ERECTION` without `IS_INSULATION`
+raises, in both `prepare_data.py` and `predict()`.
+
+**Tax is the same class of problem and was missed in v3.** v3 applied a state rate
+to everyone. But only 53% of US rows carry tax, and the share varies *within*
+states: Oregon 0%, Arkansas 18%, Texas 38%, Illinois 77%, New Jersey 91%. That is
+not geography, it is customer exemption status.
+
+The clean split: **geography sets the rate, the customer sets whether it applies.**
+Within a state the rate is near-constant (median std across 30 states: 0.008), so
+the rate stays a lookup. Whether it applies became `IS_TAXABLE`.
+
+## 28. What it cost
+
+Nothing.
+
+| | median | mean | p90 | aggregate | top 5% |
+|---|---|---|---|---|---|
+| v3 (with classifiers) | 6.1% | 8.7% | 18.8% | −3.8% | −12.8% |
+| **v4 (scope as input)** | **6.3%** | **8.7%** | **18.1%** | **−4.1%** | **−13.3%** |
+
+Identical mean, slightly better p90. That is expected: validation always used true
+scope, so the classifiers were never doing any work there. They only ever mattered
+at prediction time, where they were a liability rather than a feature.
+
+Out-of-fold across the whole archive: median 8.1%, 644 rows beyond ±30% — same as
+v3.
+
+## 29. What this simplified
+
+Removing the classifiers removed a surprising amount of machinery:
+
+- **Four models gone.** 14 fitted estimators instead of 22.
+- **One encoder instead of two.** v3 needed `encoder_nf` — a second encoder built
+  without the scope flags — because the classifiers must not see the flags they
+  predict, or a blank flag reads as "no insulation" and the classifier confirms it.
+  That whole hazard disappears when nothing is being predicted.
+- **Single-stage prediction.** v3's `predict()` ran stage one to resolve scope on
+  the flag-free matrix, then stage two to price with flags set. Now there is one
+  stage.
+- **No hard-threshold-vs-expected-value question.** v3 had to choose between
+  `P × V` (correct for a portfolio, incoherent for one tank — it returns half an
+  insulation package) and a 0.5 threshold. The question does not arise.
+- **Smaller bundle.** The file is `tbt_pricing_bundle.joblib` now, since "model"
+  was always misleading for a container of fourteen estimators.
+
+Deleting a component that was performing well, because the question it answered
+should not have been asked, is usually the right call. It was here.
+
+## 30. Validation added
+
+`prepare_data.py` and `load_training()` now check things that were previously
+assumed:
+
+- Scope columns present and non-blank on every row — raises, does not default.
+- `IS_INSULATION_ERECTION` implies `IS_INSULATION`.
+- Each scope flag agrees with whether that component actually carries pricing.
+- Material and Fabrication non-zero; the script warns on the 10 rows missing
+  Material Price and 52 missing Fabrication Price in the raw export. Those are
+  incomplete quotes and were already being dropped, but silently.
+
+`predict()` additionally warns when a quote is marked taxable but no rate exists on
+file for its state, which would otherwise show tax as zero without explanation.
+
+## 31. One thing to fix at the source
+
+`prepare_data.py` derives scope by asking whether a component carries a non-zero
+price. That is the right migration for 6,892 historical rows and the wrong thing to
+rely on going forward.
+
+**A blank price and a genuinely excluded scope look identical after the fact.** A
+quote where the estimator had not yet filled in freight is indistinguishable from
+one where the customer collects. Only the person building the quote knows which.
+
+Capture these as real fields at quote time — five Yes/No dropdowns on the quote
+sheet. It costs the estimator five clicks, removes the ambiguity permanently, and
+it is the same five answers the model needs anyway.
+
+---
+---
+
+# v4.2 — Retrain Cadence, Tank Name, Ensemble
+
+## 32. Retraining cadence is the largest single lever
+
+Measured on a month-by-month forward test over 2026:
+
+| Cadence | mean | median | p90 |
+|---|---|---|---|
+| Train once, never retrain | 9.99% | 7.41% | 21.5% |
+| Retrain quarterly | 9.28% | 6.71% | 19.6% |
+| **Retrain monthly** | **8.69%** | **6.09%** | **19.3%** |
+
+**1.30 points from monthly instead of never — larger than every modelling change
+in this project combined**, at a cost of two minutes of CPU per month. It had been
+sitting in the deployment notes as a footnote. It belongs at the top.
+
+## 33. Tank Name was being discarded
+
+The free-text `Tank Name` column holds process descriptors: "Primary Anaerobic
+Digester - Hybrid", "MBBR Reaeration Reactor", "Acidified Waste Slurry Tank". These
+are the closest thing in the data to the appendage schedule we do not have.
+
+Median $/sq-ft by keyword, against a $76.0 base:
+
+| Keyword group | n | vs base |
+|---|---|---|
+| backwash | 27 | 1.62x |
+| ext. rafters / ECCS / HDG | 94 | 1.51x |
+| dome / geodesic / membrane | 51 | 1.40x |
+| digester / anaerobic / aerobic | 201 | 1.35x |
+| leachate / landfill | 34 | 1.30x |
+| sludge / slurry / thickener | 165 | 1.13x |
+| equalization / detention | 173 | 0.85x |
+| process / chemical / oil | 154 | 0.78x |
+| dual / combo / hybrid / zone | 207 | 0.68x |
+
+A 2.4x spread. v4.2 extracts 18 process-family flags plus five name-shape features
+(length, word count, generic-name flag, contains-digits, stated capacity). A tank
+called "Tank 1" runs $69.9/sq-ft against $78.9 for a descriptively named one — the
+name length is itself a proxy for engineering content.
+
+**The univariate lift is partly confounded**, and it is worth being honest about
+that: `Use Type` and `Deck Style` already capture much of it, since "dome" largely
+*is* Aluminum Geodesic Dome. Net contribution was 9.99% -> 9.92% alone, and
+9.84% -> 9.72% stacked on the ensemble. Real, modest, worth keeping.
+
+A bug worth recording: `predict()` had no alias for `tank_name`, so the natural
+spelling silently did nothing while `engineer()` worked correctly. Fixed.
+
+## 34. Ensemble
+
+Two GBM variants averaged in log space (log-space mean = geometric mean of prices,
+the right average for a multiplicative target). Four variants were tested and gain
+about 0.05 more, at double the training time; the extra pair is left commented out
+in `ENSEMBLE` for anyone who wants it.
+
+## 35. Where v4.2 lands
+
+| Quarter | n | median | mean | p90 | aggregate | top 5% |
+|---|---|---|---|---|---|---|
+| 2026Q1 | 719 | 7.3% | 9.6% | 20.2% | -4.1% | -14.0% |
+| 2026Q2 | 686 | 6.0% | 8.9% | 19.3% | -7.1% | -23.8% |
+| 2026Q3 | 190 | 4.3% | 6.9% | 15.6% | -2.1% | -4.0% |
+| **mean** | | **5.9%** | **8.5%** | **18.3%** | **-4.5%** | **-13.9%** |
+
+Out-of-fold across the archive: 642 rows beyond +/-30%, with Material and
+Construction driving 87% of them.
+
+Version history, same protocol:
+
+| | mean | median |
+|---|---|---|
+| v1 | 11.5% | 8.5% |
+| v3 | 8.7% | 6.1% |
+| v4 | 8.7% | 6.3% |
+| **v4.2** | **8.5%** | **5.9%** |
+
+## 36. Eleven things that did not work
+
+Recorded so nobody spends a week re-deriving them. All measured on the same
+forward holdout, baseline 9.99% mean:
+
+| Attempt | mean | note |
+|---|---|---|
+| Inverse-frequency segment weighting | 10.18% | trades majority accuracy for minority |
+| Hierarchical partial pooling on OOF residuals | 9.94% | always chose maximum shrinkage |
+| Prediction clipping to a plausible $/sq-ft band | 10.02-17.10% | extreme predictions are mostly right |
+| Per-component recency half-lives | 10.1-10.4% | uniform 1.0 yr wins |
+| Customer target encoding | 11.02% | learns the customer, stops learning the tank |
+| Revision de-duplication | 12.49% | loses 36% of the data |
+| Drop Argentina from training | 10.23% | |
+| Drop optional/alternate rows | 10.17% | |
+| Drop Budget bids | 10.65% | |
+| Calendar features (month, revision #) | 10.78% | |
+| Shell-course geometry | 10.10% | |
+
+**Every data-cleaning move made it worse.** More data beats cleaner data here,
+without exception. That is worth internalising before the next person proposes a
+scrub.
+
+## 37. The diagnosis behind all of it
+
+Segment error decomposed into bias and spread, out-of-fold:
+
+| Segment | n | bias (median) | spread (IQR) |
+|---|---|---|---|
+| Fire Protection | 2,099 | -0.1% | **12.3%** |
+| All rows | 4,911 | +0.3% | 18.2% |
+| Prevailing Wage | 385 | -1.4% | 24.9% |
+| Waste Water | 1,401 | +1.9% | 27.3% |
+| Industrial Silo | 236 | +2.4% | 29.6% |
+| Canada | 117 | -2.9% | **32.9%** |
+| Argentina | 105 | **-16.7%** | 30.4% |
+
+Canada's median error is under 3%. The model is *centred* on Canada — the spread
+is the problem. **A correction can fix bias; nothing fixes variance.** That single
+fact explains why partial pooling, segment weighting, and every calibration attempt
+failed. Argentina is the one real bias in the data, and on 105 rows exclusion is
+sounder than correction.
+
+The variance gap between Fire Protection (12.3%) and Waste Water (27.3%) is the
+whole remaining story. Fire tanks are NFPA-22 commodities: given diameter, height
+and material there is essentially one right tank. Waste-water tanks are
+engineered-to-order — mixers, baffles, covers, launders, custom nozzle schedules —
+and none of that is in the data. Tank Name is a weak proxy for it.
+
+**Appendage counts remain the single highest-value column TBT could add.** That has
+been the recommendation since v1 and three rounds of modelling have not changed it.
