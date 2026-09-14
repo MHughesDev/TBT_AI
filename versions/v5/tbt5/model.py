@@ -30,10 +30,27 @@ CALIB_QUARTERS = 2
 
 
 class TBT5:
-    def __init__(self, objective="mape", with_components=True, with_comparables=True):
+    """
+    objective       which point estimate to emit; see decision.py
+    budget          "full" for a real fit, "fast" for a half-budget one. "fast"
+                    is for tests and for checking that a change runs at all —
+                    it is not what you ship, and it is not what the bench scores.
+    """
+
+    def __init__(self, objective="mape", with_components=True,
+                 with_comparables=True, with_physics=True, budget="full"):
+        if budget not in ("full", "fast"):
+            raise ValueError("budget must be 'full' or 'fast'")
         self.objective = objective
         self.with_components = with_components
         self.with_comparables = with_comparables
+        self.with_physics = with_physics
+        self.budget = budget
+
+    def _dropped(self):
+        """Numeric columns this configuration withholds, for the ablations."""
+        from . import physics
+        return tuple(physics.PHYSICS_FEATURES) if not self.with_physics else ()
 
     # ---------------------------------------------------------------- fitting
     def _fit_core(self, df, mask, light=False):
@@ -49,6 +66,7 @@ class TBT5:
         tr = df[mask]
         w = datamod.weights(tr)
 
+        light = light or self.budget == "fast"
         scale = 0.5 if light else 1.0
         direct_params = ([_scaled(GBM_BASE, scale)] if light
                          else [GBM_BASE, GBM_ALT])
@@ -64,9 +82,9 @@ class TBT5:
             for f in cmpmod.FEATURES:
                 tr[f] = np.nan
 
-        enc = Encoder().fit(tr)
+        enc = Encoder(drop=self._dropped()).fit(tr)
         X = enc.transform(tr)
-        B = features.backbone(tr)
+        B = features.backbone(tr, with_physics=self.with_physics)
         ci = enc.cat_idx
 
         direct = LogPriceModel(ci, params=direct_params, quantiles=quantiles).fit(
@@ -87,7 +105,12 @@ class TBT5:
         return {"enc": enc, "direct": direct, "comps": comps, "cmp": cmp_}
 
     def _raw_predict(self, parts, df):
-        """Per-learner dollar predictions plus the conditional log-scale."""
+        """Per-learner dollar predictions, the conditional log-scale, and the
+        per-component breakdown. Returns everything rather than stashing the
+        breakdown on the instance: this is also called with the calibration
+        model, and a side-channel would leave the wrong model's components
+        behind.
+        """
         d = df
         if parts["cmp"] is not None:
             d = cmpmod.attach(d, parts["cmp"].transform(d))
@@ -97,7 +120,7 @@ class TBT5:
                 d[f] = np.nan
 
         X = parts["enc"].transform(d)
-        B = features.backbone(d)
+        B = features.backbone(d, with_physics=self.with_physics)
 
         log_direct = parts["direct"].predict(X, B)
         levels, logq = parts["direct"].predict_quantiles(X, B)
@@ -106,20 +129,19 @@ class TBT5:
 
         preds = {"direct": np.exp(log_direct)}
 
+        per = {}
         if parts["comps"]:
             present = _presence(d)
             total = np.zeros(len(d))
-            per = {}
             for c, m in parts["comps"].items():
                 v = np.exp(m.predict(X, B)) * present[c]
                 per[c] = v
                 total += v
             preds["components"] = total
-            self._last_components = per
         if parts["cmp"] is not None:
             preds["comparables"] = np.exp(d["cmp_logprice"].values)
 
-        return preds, log_direct, logq, levels, sigma
+        return preds, sigma, per
 
     def fit(self, df, verbose=True):
         """Fit on every plausible row, calibrating on a trailing inner holdout."""
@@ -128,7 +150,8 @@ class TBT5:
         qs = sorted(q.dropna().unique())
 
         # --- inner split: fit on the earlier part, calibrate on the tail -------
-        blend, shift, bands = dict(BLEND_PRIOR), 0.0, {80: 1.6, 90: 2.0}
+        blend, bands = dict(BLEND_PRIOR), {80: 1.6, 90: 2.0}
+        shifts = {o: 0.0 for o in decision.OBJECTIVES}
         if len(qs) > CALIB_QUARTERS + 4:
             cut = qs[-CALIB_QUARTERS]
             inner = pl & (q < cut).values
@@ -137,25 +160,37 @@ class TBT5:
                 if verbose:
                     print(f"  calibrating on {int(cal.sum())} rows from {cut} onward…")
                 p0 = self._fit_core(df, inner, light=True)
-                preds, logmed, logq, levels, sigma = self._raw_predict(p0, df[cal])
+                preds, sigma, _ = self._raw_predict(p0, df[cal])
                 actual = df[TARGET].values[cal]
 
+                # The blend is fitted on mean APE for every objective. It is
+                # choosing which learner is more accurate, which does not depend
+                # on the decision rule; the decision layer then converts that
+                # accuracy into the right point estimate.
                 blend = fit_blend(preds, actual, prior=BLEND_PRIOR)
-                est = _apply_blend(preds, blend)
-                # The shrink and the shift are fitted in that order: the shrink is
-                # per-row and the shift mops up whatever is left model-wide.
-                log_est = decision.point_estimate(
-                    np.log(np.maximum(est, 1e-9)), objective=self.objective,
-                    sigma=sigma)
-                shift = decision.fit_global_shift(np.exp(log_est), actual)
+                est = np.log(np.maximum(_apply_blend(preds, blend), 1e-9))
+
+                # A shift per objective, so that estimating under one objective
+                # never silently applies another's correction. The shrink is
+                # per-row; the shift mops up what is left model-wide.
+                shifts = {}
+                for obj in decision.OBJECTIVES:
+                    le = decision.point_estimate(est, objective=obj, sigma=sigma)
+                    shifts[obj] = decision.fit_global_shift(np.exp(le), actual,
+                                                            objective=obj)
+                shift = shifts[self.objective]
+
+                log_est = decision.point_estimate(est, objective=self.objective,
+                                                  sigma=sigma)
                 resid = np.abs(np.log(actual) - (log_est + shift))
                 bands = {int((1 - a) * 100): float(np.exp(np.quantile(resid, 1 - a)))
                          for a in (0.20, 0.10)}
                 if verbose:
                     print("  blend: " + ", ".join(f"{k} {v:.2f}"
                                                   for k, v in blend.items()))
-                    print(f"  shrink objective={self.objective}, "
-                          f"global shift x{np.exp(shift):.4f}")
+                    print("  shift: " + ", ".join(
+                        f"{k} x{np.exp(v):.4f}" for k, v in shifts.items())
+                        + f"   (objective={self.objective})")
                     print(f"  80% band /x {bands[80]:.2f}   90% band /x {bands[90]:.2f}")
 
         # --- final fit on everything plausible --------------------------------
@@ -163,7 +198,8 @@ class TBT5:
             print(f"\n  fitting final models on {int(pl.sum())} plausible rows…")
         self.parts_ = self._fit_core(df, pl)
         self.blend_ = blend
-        self.shift_ = shift
+        self.shifts_ = shifts
+        self.shift_ = shifts[self.objective]
         self.bands_ = bands
         self.tax_ = datamod.tax_table(df)
         self.meta_ = {
@@ -188,15 +224,15 @@ class TBT5:
     def estimate(self, df, objective=None):
         """Dollar estimates for an engineered frame. The scoring workhorse."""
         objective = objective or self.objective
-        preds, logmed, logq, levels, sigma = self._raw_predict(self.parts_, df)
+        preds, sigma, components = self._raw_predict(self.parts_, df)
         est = _apply_blend(preds, self.blend_)
         log_est = decision.point_estimate(np.log(np.maximum(est, 1e-9)),
                                           objective=objective, sigma=sigma)
         return {
-            "estimate": np.exp(log_est + self.shift_),
+            "estimate": np.exp(log_est + self.shifts_[objective]),
             "sigma": sigma,
             "learners": preds,
-            "components": getattr(self, "_last_components", {}),
+            "components": components,
         }
 
     # -------------------------------------------------------------- persistence

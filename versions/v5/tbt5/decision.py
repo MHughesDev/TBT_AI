@@ -149,19 +149,24 @@ def point_estimate(log_median, logq=None, levels=None, objective="mape",
     return log_median - sigma ** 2
 
 
-def fit_global_shift(pred, actual, lo=-0.25, hi=0.10, n=176):
-    """One scalar multiplicative correction, chosen to minimise mean APE.
+def fit_global_shift(pred, actual, objective="mape", lo=-0.25, hi=0.10, n=176):
+    """One scalar multiplicative correction, chosen to suit the objective.
 
-    Fitted on out-of-fold predictions only. This mops up whatever the
-    per-row shrink left on the table — model-wide optimism, a residual
-    distribution that is not quite the shape assumed above — and it is the single
-    cheapest thing in the whole pipeline that moves the headline metric.
+    Fitted on out-of-fold predictions only. This mops up whatever the per-row
+    shrink left on the table — model-wide optimism, a residual distribution that
+    is not quite the shape assumed above — and it is the cheapest thing in the
+    pipeline that moves the headline metric.
+
+    The criterion has to match the objective or the objective is a lie. A shift
+    fitted on mean APE and applied to `objective="median"` produces something
+    that is not the conditional median, and makes any comparison between the two
+    meaningless — both would then carry the same global mean-APE correction and
+    differ only in the per-row part.
 
     It is a *shift in log space*, i.e. a constant multiplier. Anything richer
-    would be a recalibrator, and v4 established that there is nothing for a
-    recalibrator to learn: the model is unbiased in sample, log-log slope 1.007.
-    The gain here comes from the objective being asymmetric, not from the model
-    being miscalibrated.
+    would be a recalibrator, and v4 established there is nothing for one to
+    learn: the model is unbiased in sample, log-log slope 1.007. What is being
+    corrected here is the asymmetry of the objective, not a miscalibration.
     """
     pred = np.asarray(pred, dtype=float)
     actual = np.asarray(actual, dtype=float)
@@ -169,6 +174,13 @@ def fit_global_shift(pred, actual, lo=-0.25, hi=0.10, n=176):
     if ok.sum() < 30:
         return 0.0
     p, a = pred[ok], actual[ok]
+
+    if objective == "unbiased":
+        # Make the sum come out right — the only thing "unbiased" can mean.
+        return float(np.log(a.sum() / p.sum()))
+
+    score = ((lambda e: float(np.median(e))) if objective == "median"
+             else (lambda e: float(np.mean(e))))
     cs = np.linspace(lo, hi, n)
-    errs = [np.mean(np.abs(p * np.exp(c) - a) / a) for c in cs]
+    errs = [score(np.abs(p * np.exp(c) - a) / a) for c in cs]
     return float(cs[int(np.argmin(errs))])

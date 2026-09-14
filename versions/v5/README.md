@@ -22,23 +22,45 @@ attacks that from three directions its own handoff points at without following:
 
 ## Read this before anything else
 
-**v5's accuracy has not been measured.** The archive is customer data and is not
-in this repository — `*.csv` is gitignored, which is correct. Nothing here has
-been run against it.
+**v5 has not been measured on the real archive, and on synthetic data it does not
+beat v4 on mean APE.**
 
-Every number in this folder is either carried from v4's own measurements, derived
-analytically, or measured on synthetic data from `tbt5/synth.py` — which tests
-that the pipeline runs, not how accurate it is.
+The archive is customer data and is not in this repository — `*.csv` is
+gitignored, which is correct. Nothing here has been run against it. Every number
+in this folder is carried from v4's own measurements, derived analytically, or
+measured on synthetic data from `tbt5/synth.py`.
 
-One command settles it, and it takes about twenty minutes:
+Here is what the synthetic bench said, four rolling-origin quarters, identical
+rows and folds:
+
+| entrant | mean | median | **$top5%** | secs |
+|---|---|---|---|---|
+| v4 component GBM | **6.6%** | **5.3%** | −5.6% | **380** |
+| v5 `objective=mape` | 6.7% | 5.4% | **−3.7%** | 896 |
+| v5 ablation: no physics | 6.7% | 5.4% | −6.7% | 721 |
+
+Read honestly, that says three things:
+
+- **The physics layer works.** Removing it nearly doubles the large-tank bias
+  (−3.7% → −6.7%). That is the thing v4's handoff calls open problem #1, tested
+  directly, and it holds.
+- **It buys calibration, not mean error.** 6.7% either way.
+- **v5 is behind v4 on the headline metric** by 0.1 points, and costs 2.4× the
+  training time.
+
+Synthetic data is weak evidence — it is a guess at how pricing works, and it
+happens to be a smooth guess with homogeneous noise, which is the regime least
+favourable to two of v5's three ideas. But it is the evidence there is, and it
+does not currently favour v5.
+
+One command settles it properly, and it takes about twenty minutes:
 
 ```bash
 python ../../bench/compare.py archive_prepared.csv
 ```
 
-v4 and v5 on identical rows, identical folds, one leaderboard. **Run that before
-believing anything below.** If v5 does not win, v4 is still there and still
-works.
+**Run that before deploying anything here.** If v5 does not win, v4 is still
+there and still works.
 
 ---
 

@@ -22,14 +22,16 @@ class Encoder:
     absent from some exports and is exactly this case.
     """
 
-    def __init__(self):
+    def __init__(self, drop=()):
         self.enc = OrdinalEncoder(handle_unknown="use_encoded_value",
                                   unknown_value=-1, encoded_missing_value=-1)
+        self.drop = set(drop)
 
     def fit(self, df):
-        num = df[NUMERIC].astype(float).to_numpy()
+        cols = [c for c in NUMERIC if c not in self.drop]
+        num = df[cols].astype(float).to_numpy()
         keep = []
-        for j, c in enumerate(NUMERIC):
+        for j, c in enumerate(cols):
             col = num[:, j]
             fin = col[np.isfinite(col)]
             if fin.size and np.unique(fin).size > 1:

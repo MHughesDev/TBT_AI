@@ -156,19 +156,25 @@ def build(df):
     return df
 
 
-def backbone(df):
+def backbone(df, with_physics=True):
     """Design matrix for the parametric log-log stage.
 
     v4's backbone is [log D, log H, log D x log H, t]. v5 adds log(shell steel
-    weight) and the min-governed fraction, which is the whole point: those two
-    carry the regime change that a pure power law in D and H cannot bend to. The
-    remaining terms are kept so that v5 nests v4's basis rather than replacing it
-    — if the physics terms are worthless the ridge can zero them out.
+    weight), the min-governed fraction, and their interaction — which is the
+    whole point: those carry the regime change that a pure power law in D and H
+    cannot bend to, because the cost curve has a kink at a fixed diameter and a
+    power law has none. The remaining terms are kept so that v5 nests v4's basis
+    rather than replacing it: if the physics terms are worthless the ridge zeroes
+    them and this degenerates to v4's.
+
+    `with_physics=False` gives exactly v4's basis, for the ablation.
     """
     lD = np.log(df["Diameter (ft)"].astype(float).clip(lower=0.1).values)
     lH = np.log(df["Height (ft)"].astype(float).clip(lower=0.1).values)
-    lsteel = np.log1p(df["ph_shell_lb"].astype(float).clip(lower=0).values)
-    lgov = df["ph_min_governed_frac"].astype(float).fillna(1.0).values
     t = df["months"].astype(float).fillna(0).values / 12.0
-    return np.column_stack([lD, lH, lD * lH, lsteel, lsteel * lgov, lgov, t,
-                            np.ones(len(df))])
+    cols = [lD, lH, lD * lH, t, np.ones(len(df))]
+    if with_physics:
+        lsteel = np.log1p(df["ph_shell_lb"].astype(float).clip(lower=0).values)
+        lgov = df["ph_min_governed_frac"].astype(float).fillna(1.0).values
+        cols[3:3] = [lsteel, lsteel * lgov, lgov]
+    return np.column_stack(cols)

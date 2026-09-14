@@ -221,17 +221,15 @@ So the decision rule is a parameter:
 v4's handoff says "do not use it to value a backlog". With `objective="unbiased"`
 that warning is addressed rather than inherited.
 
-Measured on synthetic data, the ordering comes out exactly as the algebra
-predicts — `mape` lowest on mean APE, `unbiased` best on aggregate bias:
+Each objective also gets its **own** global shift, fitted to its own criterion —
+mean APE, median APE, or "make the sum come out right". A shift fitted on mean
+APE and applied under `objective="median"` produces something that is not the
+conditional median, and makes any comparison between the two meaningless, since
+both would then carry the same global mean-APE correction. This was wrong in the
+first cut of v5 and the bench is what caught it.
 
-| objective | mean | median | p90 | $agg | $top5% |
-|---|---|---|---|---|---|
-| median | 5.25% | 5.15% | 10.9% | +0.8% | −4.2% |
-| **mape** | **5.06%** | 4.84% | **9.4%** | −0.2% | −5.7% |
-| unbiased | 5.42% | 4.90% | 11.2% | **+1.3%** | **−3.4%** |
-
-Synthetic data. This shows the machinery does what it says, not how much it is
-worth on the archive.
+On synthetic data the ordering comes out as the algebra predicts, but the
+magnitude is small — see §7.
 
 ### Losses
 
@@ -317,6 +315,66 @@ and keeps them dropped at score time.
 
 ---
 
+## 5a. What the synthetic bench actually said
+
+`python bench/compare.py --synthetic`, four rolling-origin quarters, identical
+rows and folds for every entrant. **This is synthetic data — it tests the
+argument's mechanics, not its value on the archive.** Reported because a design
+document that only lists the results that flatter it is worthless.
+
+| entrant | mean | median | p90 | $agg | **$top5%** | secs |
+|---|---|---|---|---|---|---|
+| v4 component GBM | **6.6%** | **5.3%** | 14.1% | −1.8% | −5.6% | **380** |
+| v5 `objective=mape` | 6.7% | 5.4% | 14.1% | −1.2% | **−3.7%** | 896 |
+| v5 `objective=median` | 6.8% | 5.5% | 14.2% | **−0.5%** | **−2.6%** | 920 |
+| v5 ablation: no physics | 6.7% | 5.4% | 14.2% | −1.7% | −6.7% | 721 |
+| v5 ablation: no comparables | 6.8% | 5.5% | 14.3% | −1.5% | −4.6% | 808 |
+
+Four things follow, and only one of them is good news.
+
+**The physics layer does what it was built to do.** Removing it moves the top-5%
+aggregate bias from −3.7% to −6.7% — it nearly doubles. That is the central claim
+of §2 tested directly, and it holds. The synthetic generator builds its costs
+course by course with *different* constants, plate widths and rounding from
+`physics.py`, so this is the model inferring a superlinear regime rather than
+inverting a formula it was handed.
+
+**The physics layer buys calibration, not mean error.** Mean APE is 6.7% with and
+without it. It fixes the large end, which is where the money is and where v4's
+own handoff says the problem is — but if mean APE is the only thing being scored,
+this change alone does not move it.
+
+**v5 does not beat v4 on mean APE here.** 6.7% against 6.6%. That is a real
+result and it is not dismissed. Two things are worth knowing before reading it as
+final: v5 gives each component one 600-iteration learner where v4 gives two at
+1,200, a budget cut made to keep the retrain near two minutes; and the synthetic
+generator is a smooth, near-deterministic function of the specs with homogeneous
+multiplicative noise — precisely the regime where extra boosting capacity pays
+and where conditional-variance shrinkage has nothing to bite on, because σ barely
+varies. The archive is not that. Whether the difference survives contact with it
+is exactly what `bench/compare.py` is for.
+
+**Comparables earn their place as features, not as a blend entrant.** The blend
+gave them weight 0.00 on a single fold, yet removing them costs 0.1 points of
+mean and 0.9 points of top-5% bias. The `cmp_*` columns feed the booster whether
+or not the blend uses the standalone prediction, which is the design intent in §4
+and is the reason they are wired in as features.
+
+### One thing to be careful about: `objective="unbiased"` is calibrated, not guaranteed
+
+Its shift is chosen so the predictions sum exactly to the actuals **on the
+calibration slice**. That is an identity there and nothing more than a fitted
+constant one quarter later. On a synthetic holdout a quarter ahead it came out
++4.6% while `objective="median"` happened to land at +0.2%.
+
+So "unbiased" means *unbiased where it was calibrated*. It is still the right
+setting for summing predictions — it is the only one that even targets the sum —
+but it is not a promise, and a backlog valuation should be recalibrated rather
+than trusted across a stale model. Which is another argument for the monthly
+retrain.
+
+---
+
 ## 6. What is carried over from v4 unchanged, and why
 
 These are not defaults. They are conclusions that were paid for, and re-deriving
@@ -364,17 +422,25 @@ minutes is worth nothing, and cadence is worth 1.3 points.
 Stated in advance, so the bench run is a test rather than a search for
 confirmation:
 
-| Thesis | Falsified if |
-|---|---|
-| Physics features fix the large-tank bias | `$top5%` on the real archive stays near −13% to −17% |
-| The physics backbone is the right *shape* | The ridge coefficients on `log(steel)` and its interaction come out near zero |
-| The MAPE decision layer is worth having | `objective="mape"` does not beat `objective="median"` on mean APE |
-| Comparables are worth having | The `no physics/comparables` entrant matches the full model |
-| Dedup weighting helps | Turning it off (`data.weights(dedup=False)`) does not raise mean APE |
+| Thesis | Falsified if | Synthetic says |
+|---|---|---|
+| Physics features fix the large-tank bias | `$top5%` on the real archive stays near −13% to −17% | **Survived** — removing them takes top-5% bias from −3.7% to −6.7% |
+| The physics backbone is the right *shape* | The ridge coefficients on `log(steel)` and its interaction come out near zero | Not yet checked directly |
+| The MAPE decision layer is worth having | `objective="mape"` does not beat `objective="median"` on mean APE | Marginal — 6.7% against 6.8%, within noise at four folds |
+| Comparables are worth having | The `no comparables` ablation matches the full model | **Survived, narrowly** — 0.1 pt of mean, 0.9 pt of top-5% bias |
+| Dedup weighting helps | Turning it off (`data.weights(dedup=False)`) does not raise mean APE | Not yet run |
+| v5 beats v4 at all | v4 wins on mean APE | **Not survived on synthetic data** — v4 6.6%, v5 6.7% |
 
-If the first two fail together, the conclusion is that TBT's prices are not
-driven by steel weight the way the design codes suggest — which is itself worth
-knowing, and points at labour and rigging rather than materials.
+The last row is the one that matters and it currently reads against v5. Synthetic
+data is weak evidence in both directions — it is a guess at the pricing process,
+and it happens to be a guess with homogeneous noise and smooth structure, which
+is the regime least favourable to two of v5's three ideas. But "the synthetic
+bench was unfavourable and we shipped anyway" is a much worse position than
+"we ran the real bench", and the real bench is one command.
+
+If the first two rows fail together on the archive, the conclusion is that TBT's
+prices are not driven by steel weight the way the design codes suggest — which is
+itself worth knowing, and points at labour and rigging rather than materials.
 
 ---
 

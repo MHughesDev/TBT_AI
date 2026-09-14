@@ -172,12 +172,18 @@ def main():
         ap.error("give a CSV or pass --synthetic")
 
     d5 = load_common(src)
+    # The two ablations isolate v5's thesis: drop the computed shell schedule
+    # (backbone falls back to v4's basis, physics features withheld from the
+    # trees), and drop the comparables engine. If either matches the full model,
+    # that half of the argument is wrong — see versions/v5/DESIGN.md section 8.
     entrants = {
         "v4 component GBM": v4_adapter(d5),
         "v5 (objective=median)": v5_adapter(d5, objective="median"),
         "v5 (objective=mape)": v5_adapter(d5, objective="mape"),
-        "v5 no physics/comparables": v5_adapter(d5, objective="mape",
-                                                with_comparables=False),
+        "v5 ablation: no physics": v5_adapter(d5, objective="mape",
+                                              with_physics=False),
+        "v5 ablation: no comparables": v5_adapter(d5, objective="mape",
+                                                  with_comparables=False),
     }
     if a.only:
         want = {s.strip() for s in a.only.split(",")}

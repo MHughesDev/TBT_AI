@@ -57,8 +57,10 @@ def predict(construction=None, insulation=None, insulation_erection=None,
         "unbiased" the conditional mean — use this, and only this, when the
                    predictions are going to be summed, as in valuing a backlog
     """
-    m = _bundle(bundle)
-
+    # Scope is validated before the bundle is touched. A missing or unreadable
+    # model must not mask a missing scope answer: the caller needs to be told
+    # which of the two is wrong, and the scope check does not need a fitted
+    # model to run.
     if insulation_erection is None:
         insulation_erection = insulation
     given = {"construction": construction, "insulation": insulation,
@@ -73,6 +75,8 @@ def predict(construction=None, insulation=None, insulation_erection=None,
     if insulation_erection and not insulation:
         raise ScopeError("insulation_erection=True requires insulation=True. We "
                          "cannot install insulation we are not supplying.")
+
+    m = _bundle(bundle)
 
     row = {ALIAS.get(k, k): v for k, v in kw.items()}
     row.setdefault("Quantity", 1)
@@ -128,8 +132,14 @@ def predict(construction=None, insulation=None, insulation_erection=None,
     if taxable and rate == 0.0:
         warn.append(f"marked taxable but no rate on file for state "
                     f"'{row.get('State')}' — tax shown as zero")
-    if not np.isfinite(d["cmp_logpsf"].iloc[0]) if "cmp_logpsf" in d else False:
-        warn.append("no close comparables in the archive")
+    # Ask the learner, not the input frame. features.build() creates cmp_logpsf
+    # as NaN like every other absent numeric column; the real values are attached
+    # inside the model, so testing the input frame reported "no comparables" on
+    # every single call.
+    cmp_pred = out["learners"].get("comparables")
+    if cmp_pred is not None and not np.isfinite(cmp_pred[0]):
+        warn.append("no close comparables in the archive — this spec is unlike "
+                    "anything quoted before")
     if sigma > 0.30:
         warn.append(f"wide conditional spread (sigma {sigma:.2f}) — the model is "
                     "unsure about this combination of specs")

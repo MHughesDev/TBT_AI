@@ -140,19 +140,30 @@ def test_comparables_never_see_the_future(archive):
 
 
 def test_comparables_exclude_same_quote(archive):
-    """A revision finding its own parent reports ~3% error and predicts nothing."""
+    """A revision finding its own parent reports ~3% error and predicts nothing.
+
+    Tested by starving the reference set: if the only rows available to compare
+    against are other revisions of the query's own quote, a correct engine finds
+    nothing at all. Checking that the answer merely *differs* from the query's
+    own price is too weak — two tanks with the same specs legitimately price
+    within a percent of each other.
+    """
     d = archive[archive["plausible"]].reset_index(drop=True)
-    dup = d[d.duplicated(GROUP_COL, keep=False)]
-    if len(dup) < 20:
-        pytest.skip("no revisions in this sample")
-    c = cmpmod.Comparables().fit(d)
-    # Query a revision against the full reference set: if self-matching were
-    # allowed its comparable would be almost exactly its own price.
-    q = dup.iloc[[0]]
-    out = c.transform(q)
-    if np.isfinite(out["cmp_logprice"][0]):
-        ratio = np.exp(out["cmp_logprice"][0]) / q[TARGET].values[0]
-        assert not (0.985 < ratio < 1.015), "comparable is suspiciously exact"
+    counts = d[GROUP_COL].value_counts()
+    revised = counts[counts >= 4]
+    if revised.empty:
+        pytest.skip("no sufficiently revised quote in this sample")
+
+    qid = revised.index[0]
+    own = d[d[GROUP_COL] == qid].reset_index(drop=True)
+    c = cmpmod.Comparables().fit(own)          # reference set = the quote itself
+    out = c.transform(own.iloc[[0]])
+    assert not np.isfinite(out["cmp_logpsf"][0]), (
+        "a revision found a comparable among its own quote's rows")
+
+    # Sanity: with the rest of the archive available it does find something.
+    c2 = cmpmod.Comparables().fit(d)
+    assert np.isfinite(c2.transform(own.iloc[[0]])["cmp_logpsf"][0])
 
 
 # ------------------------------------------------------------------ decision
@@ -208,16 +219,25 @@ def test_global_shift_finds_the_optimum():
 
 
 # ------------------------------------------------------------------ pipeline
+def _time_split(archive, frac=0.8):
+    """Train on the first `frac` of the date range, score the rest.
+
+    A proportional cut rather than the last calendar quarter: on a small sample
+    the final quarter can be almost empty, and a test that silently skips is a
+    test that is not run.
+    """
+    d = pd.to_datetime(archive["Due Date"], errors="coerce")
+    cut = d.quantile(frac)
+    pl = archive["plausible"].values
+    return (archive[(d <= cut).values & pl], archive[(d > cut).values & pl])
+
+
 def test_end_to_end_fit_and_score(archive):
     """The whole pipeline, small enough to run in a test."""
     from tbt5.model import TBT5
-    q = data.quarters(archive)
-    qs = sorted(q.dropna().unique())
-    tr = archive[(q < qs[-1]).values & archive["plausible"].values]
-    te = archive[(q == qs[-1]).values & archive["plausible"].values]
-    if len(tr) < 300 or len(te) < 20:
-        pytest.skip("synthetic sample too small")
-    m = TBT5().fit(tr, verbose=False)
+    tr, te = _time_split(archive)
+    assert len(tr) > 300 and len(te) > 50
+    m = TBT5(budget="fast").fit(tr, verbose=False)
     out = m.estimate(te)
     assert np.isfinite(out["estimate"]).all()
     assert (out["estimate"] > 0).all()
@@ -226,18 +246,53 @@ def test_end_to_end_fit_and_score(archive):
     assert metrics(out["estimate"], te[TARGET].values)["mean"] < 60
 
 
-def test_objective_ordering(archive):
-    """mape <= median <= unbiased, row by row, by construction."""
+def test_objective_ordering_at_the_decision_layer():
+    """mape <= median <= unbiased, row by row, wherever the model is unsure.
+
+    This is the algebra of decision.py and it is exact. It holds on the shrink
+    alone — NOT on the shipped estimate, because each objective then gets its own
+    global shift fitted to its own criterion, and those shifts can reorder the
+    three. See test_each_objective_gets_its_own_shift.
+    """
+    log_est = np.log(np.array([100_000.0, 250_000.0, 900_000.0]))
+    sigma = np.array([0.08, 0.18, 0.35])
+    a = decision.point_estimate(log_est, objective="mape", sigma=sigma)
+    b = decision.point_estimate(log_est, objective="median", sigma=sigma)
+    c = decision.point_estimate(log_est, objective="unbiased", sigma=sigma)
+    assert np.all(a < b) and np.all(b < c)
+    # and the gap widens with uncertainty, which is the whole point
+    assert (b - a)[-1] > (b - a)[0]
+
+
+def test_each_objective_gets_its_own_shift(archive):
+    """A shift fitted on mean APE must not be applied under objective='median'.
+
+    Getting this wrong makes the objective label a lie and makes any comparison
+    between two objectives meaningless, since both would carry the same global
+    correction. It was wrong in the first cut of v5 and the bench caught it.
+    """
     from tbt5.model import TBT5
-    q = data.quarters(archive)
-    qs = sorted(q.dropna().unique())
-    tr = archive[(q < qs[-1]).values & archive["plausible"].values]
-    te = archive[(q == qs[-1]).values & archive["plausible"].values]
-    if len(tr) < 300 or len(te) < 20:
-        pytest.skip("synthetic sample too small")
-    m = TBT5().fit(tr, verbose=False)
-    a = m.estimate(te, objective="mape")["estimate"]
-    b = m.estimate(te, objective="median")["estimate"]
-    c = m.estimate(te, objective="unbiased")["estimate"]
-    assert np.all(a <= b * 1.0001)
-    assert np.all(b <= c * 1.0001)
+    tr, te = _time_split(archive)
+    m = TBT5(budget="fast").fit(tr, verbose=False)
+    assert set(m.shifts_) == set(decision.OBJECTIVES)
+    assert len(set(m.shifts_.values())) > 1, "all three objectives share a shift"
+
+    ests = {o: m.estimate(te, objective=o)["estimate"] for o in decision.OBJECTIVES}
+    for o, v in ests.items():
+        assert np.isfinite(v).all() and (v > 0).all(), o
+    assert not np.allclose(ests["mape"], ests["median"])
+
+
+def test_unbiased_shift_makes_the_sum_exact():
+    """The invariant behind objective='unbiased': on the data the shift is fitted
+    to, the predictions sum to the actuals.
+
+    Note this is a property of the *fit*, not a guarantee out of sample. On a
+    later quarter the same shift can be several points off — see DESIGN.md
+    section 5a. Aggregate-unbiasedness is calibrated, and calibration drifts.
+    """
+    rng = np.random.default_rng(4)
+    actual = np.exp(rng.normal(12, 0.6, 5_000))
+    pred = actual * np.exp(rng.normal(0.08, 0.2, 5_000))
+    c = decision.fit_global_shift(pred, actual, objective="unbiased")
+    assert (pred * np.exp(c)).sum() == pytest.approx(actual.sum(), rel=1e-9)

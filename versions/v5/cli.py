@@ -96,7 +96,8 @@ def cmd_score(args):
 def cmd_info(args):
     m = TBT5.load(args.bundle)
     print(json.dumps({**m.meta_, "blend": m.blend_,
-                      "global_shift_x": round(float(np.exp(m.shift_)), 4),
+                      "global_shift_x": {k: round(float(np.exp(v)), 4)
+                                         for k, v in m.shifts_.items()},
                       "bands": m.bands_}, indent=2))
 
 

@@ -18,15 +18,22 @@ feature module changes under one version when the other one needs it to.
 
 ## The versions
 
-| Folder | Architecture | Mean APE | Status |
+| Folder | Architecture | Mean APE on the archive | Status |
 |---|---|---|---|
 | [`versions/v4`](versions/v4) | Six component GBMs on a ridge log-log backbone, 70/30 blend with a direct model | **8.5%** measured | Shipped, validated |
-| [`versions/v5`](versions/v5) | Computed shell-course physics, causal comparables kNN, quantile heads, mean-APE decision layer | **not yet measured** | Complete, unmeasured |
+| [`versions/v5`](versions/v5) | Computed shell-course physics, causal comparables kNN, quantile heads, mean-APE decision layer | **not measured** | Complete, unmeasured |
 
 **v4 is the incumbent and the only version with a real number against its name.**
 v5 is a complete system built on a specific argument about where v4's remaining
-error lives; that argument has not been tested against the archive, because the
+error lives. That argument has not been tested against the archive, because the
 archive is customer data and is not in this repository.
+
+On *synthetic* data — which tests mechanics, not accuracy — v5 currently sits
+**behind** v4 on mean APE (6.7% against 6.6%) while cutting the large-tank
+aggregate bias by a third (−3.7% against −5.6%), at 2.4× the training time.
+Ablating v5's physics layer nearly doubles that bias, which is its central claim
+holding up. Do not deploy v5 over v4 until the bench has been run on the real
+file.
 
 ---
 
