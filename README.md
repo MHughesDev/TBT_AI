@@ -1,5 +1,9 @@
 # TBT Tank Pricing Model — v4
 
+> **Clean-sheet specification:** `SPEC.md` is the design a separate team builds
+> from. Everything below documents the prior v4 implementation and is evidence,
+> not the plan.
+
 Predicts tank pricing from specifications, trained on 6,679 quotes from the TBT
 archive (Dec 2023 – Dec 2026).
 
