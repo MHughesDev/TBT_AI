@@ -132,7 +132,15 @@ GBM_VARIANTS = [
 
 RIDGE_ALPHA = 1.0
 RECENCY_HALF_LIFE_YEARS = 1.0
-BLEND_WEIGHT = 0.7           # OPEN-4 default; w * components + (1-w) * direct
+# OPEN-4 RESOLVED: w = 1.0, pure component sum. The rule said take 0.7 unless
+# 1.0 lands within 0.1 points on mean and 0.5 on top-5% bias, in which case take
+# 1.0 for simplicity. On the measured run 1.0 was better on both, so the
+# tie-break never had to be used. The direct model is still fitted and stored:
+# it costs one seventh of the fit, it is the comparison that would reveal the
+# component sum failing on an unusual tank, and re-weighting needs no refit.
+# A consequence worth keeping: at w = 1.0 the breakdown sums EXACTLY to the
+# point estimate, so there is no 'why doesn't this add up' question on the sheet.
+BLEND_WEIGHT = 1.0
 
 # SPEC 3.1 plausibility gate, $/sq-ft of shell area.
 PSF_MIN, PSF_MAX = 20.0, 250.0
