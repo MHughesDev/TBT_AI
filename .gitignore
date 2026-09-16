@@ -23,7 +23,5 @@ venv/
 
 # Built model bundles and run outputs
 models/
-build_log.json
-RESULTS.md
 report*.txt
 increments.log
