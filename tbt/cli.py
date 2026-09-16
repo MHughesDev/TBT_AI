@@ -23,7 +23,7 @@ from . import batch as B
 from . import conformal as CF
 from . import loader as LD
 from . import protocol as P
-from . import train as T
+from . import retrain as T
 from .contract import QuoteInput, RefusalError
 from .scoring import estimate, model_info
 

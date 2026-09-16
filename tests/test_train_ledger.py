@@ -13,7 +13,7 @@ from tbt import conformal as CF
 from tbt import ledger as L
 from tbt import loader as LD
 from tbt import model as M
-from tbt import train as T
+from tbt import retrain as T
 
 
 @pytest.fixture

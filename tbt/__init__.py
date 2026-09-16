@@ -8,7 +8,7 @@ from .scoring import check, estimate, estimate_many, model_info
 from .loader import LoadRejected, load_training, usable_mask
 from .model import Bundle, fit_bundle, predict_frame
 from .protocol import backtest, cadence_simulation
-from .train import load_bundle, train
+from .retrain import load_bundle, train
 
 __version__ = "1.0.0"
 

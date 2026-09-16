@@ -172,3 +172,20 @@ def test_empty_variant_list_means_backbone_only():
     backbone-only, not 'fall back to production trees'."""
     assert M.Stage(params=[]).params == []
     assert len(M.Stage(params=None).params) == len(C.GBM_VARIANTS)
+
+
+def test_no_submodule_is_shadowed_by_a_package_export():
+    """`from .x import x` rebinds the package attribute `x` from the MODULE to
+    the function, so `from tbt import x` then silently returns the function and
+    every `x.CONSTANT` lookup fails at runtime. This bit twice during the build
+    (scoring, retrain); the test makes it impossible to reintroduce."""
+    import pkgutil
+    import types
+
+    import tbt
+    for mod in pkgutil.iter_modules(tbt.__path__):
+        attr = getattr(tbt, mod.name, None)
+        if attr is not None and not isinstance(attr, types.ModuleType):
+            raise AssertionError(
+                f"tbt.{mod.name} is a {type(attr).__name__}, not the module: a "
+                f"package export shadows the submodule of the same name")

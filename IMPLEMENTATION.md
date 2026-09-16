@@ -17,7 +17,7 @@ mean.
 | `tbt/ledger.py` | The append-only forward-prediction ledger | 2.7 |
 | `tbt/protocol.py` | Rolling-origin backtest and every required metric | 3 |
 | `tbt/scoring.py` | `estimate`, `check`, `estimate_many`, guard rails, tiers | 2.9, 6.5, 7.4, 7.5 |
-| `tbt/train.py` | The unattended retrain job, ledger ordering, rollback | 5 B11, 6.6 |
+| `tbt/retrain.py` | The unattended retrain job, ledger ordering, rollback | 5 B11, 6.6 |
 | `tbt/batch.py` | Batch scorer with the in-sample banner | 5 B12, 8.1 R17 |
 | `tbt/audit.py` | Forward-scored archive audit, worst first | 5 B14 |
 | `tbt/cli.py` | `python -m tbt ...` | — |

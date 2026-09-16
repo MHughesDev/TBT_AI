@@ -41,7 +41,7 @@ except ImportError:                                    # allow import for tests
     xw = _Stub()
 
 from tbt import config as C
-from tbt import train as T
+from tbt import retrain as T
 from tbt.contract import (QuoteInput, RefusalError, TOKEN_BATCH, TOKEN_MODEL,
                           WARNING_TEXT)
 from tbt.scoring import check as _check
