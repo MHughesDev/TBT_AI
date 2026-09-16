@@ -26,7 +26,15 @@ def loaded(archive_csv):
     return df, mask, rep
 
 
+# Small variants so the suite runs in a sensible time. What these tests check
+# -- guards, refusals, leakage, determinism, ledger ordering -- does not depend
+# on tree count. The production hyperparameters are exercised by the protocol
+# runs in tools/run_increments.py, not by unit tests.
+FAST = [dict(learning_rate=0.12, max_iter=60, min_samples_leaf=20,
+             l2_regularization=0.0, max_leaf_nodes=15, random_state=1)]
+
+
 @pytest.fixture(scope="session")
 def bundle(loaded):
     df, mask, _ = loaded
-    return M.fit_bundle(df, mask)
+    return M.fit_bundle(df, mask, variants=FAST)

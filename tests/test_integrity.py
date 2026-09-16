@@ -8,6 +8,7 @@ from tbt import features as F
 from tbt import loader as LD
 from tbt import model as M
 from tbt import protocol as P
+from conftest import FAST
 
 
 # --- test 1: leakage tripwire ------------------------------------------------
@@ -54,11 +55,11 @@ def test_no_future_state_in_fitted_tables(loaded):
     cutoff = pd.Timestamp("2025-07-01")
     before = mask & (pd.to_datetime(df["Due Date"]) < cutoff)
 
-    b_full = M.fit_bundle(df, before)
+    b_full = M.fit_bundle(df, before, variants=FAST)
 
     trunc = df.loc[pd.to_datetime(df["Due Date"]) < cutoff].copy()
     m_trunc, _ = LD.usable_mask(trunc)
-    b_trunc = M.fit_bundle(trunc, m_trunc)
+    b_trunc = M.fit_bundle(trunc, m_trunc, variants=FAST)
 
     assert b_full.tax == b_trunc.tax
     assert b_full.encoder.vocab == b_trunc.encoder.vocab
@@ -72,7 +73,7 @@ def test_tax_table_has_no_future_states(loaded):
     df, mask, _ = loaded
     cutoff = pd.Timestamp("2025-01-01")
     early = mask & (pd.to_datetime(df["Due Date"]) < cutoff)
-    b = M.fit_bundle(df, early)
+    b = M.fit_bundle(df, early, variants=FAST)
     later_only = set(df.loc[mask & ~early, "State"].dropna().astype(str)) - \
         set(df.loc[early, "State"].dropna().astype(str))
     assert not (set(b.tax) & later_only)
@@ -115,7 +116,7 @@ def test_one_usable_mask_serves_fitting_and_scoring(loaded, monkeypatch):
 
 def test_backtest_scores_only_usable_rows(loaded):
     df, mask, _ = loaded
-    res = P.backtest(df, mask, quarters=["2025Q3", "2025Q4"])
+    res = P.backtest(df, mask, quarters=["2025Q3", "2025Q4"], variants=FAST)
     usable_keys = set(df.loc[mask].index)
     assert len(res.rows) <= len(usable_keys)
     assert (res.rows["actual_total"] > 0).all()
@@ -124,16 +125,16 @@ def test_backtest_scores_only_usable_rows(loaded):
 # --- test 6: determinism ----------------------------------------------------
 def test_backtest_is_deterministic(loaded):
     df, mask, _ = loaded
-    a = P.backtest(df, mask, quarters=["2025Q4"])
-    b = P.backtest(df, mask, quarters=["2025Q4"])
+    a = P.backtest(df, mask, quarters=["2025Q4"], variants=FAST)
+    b = P.backtest(df, mask, quarters=["2025Q4"], variants=FAST)
     pd.testing.assert_frame_equal(a.per_quarter, b.per_quarter)
     assert a.headline == b.headline
 
 
 def test_fit_is_deterministic(loaded):
     df, mask, _ = loaded
-    b1 = M.fit_bundle(df, mask)
-    b2 = M.fit_bundle(df, mask)
+    b1 = M.fit_bundle(df, mask, variants=FAST)
+    b2 = M.fit_bundle(df, mask, variants=FAST)
     p1 = M.predict_frame(b1, df.loc[mask].head(200))["point"].values
     p2 = M.predict_frame(b2, df.loc[mask].head(200))["point"].values
     np.testing.assert_allclose(p1, p2)

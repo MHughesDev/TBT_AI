@@ -270,7 +270,25 @@ def generate(n_quotes=3018, target_rows=6892, seed=RNG_DEFAULT,
     sigma = sigma * np.where(df["wage"].values == "Prevailing Wage", 2.0, 1.0)
     sigma = sigma * np.where(df["country"].values == "CA", 2.7,
                       np.where(df["country"].values == "AR", 2.5, 1.0))
-    noise = rng.normal(0.0, 1.0, n) * sigma * noise_scale
+    # Revisions of the same tank are NEAR-DUPLICATES, not independent draws.
+    # That is the whole reason a random split reports ~3% where the truth is
+    # ~8% (SPEC 3.6), so the test bed must reproduce it: one shared draw per
+    # (quote, tank), plus a small per-revision perturbation for the genuine
+    # re-pricing that happens between revisions.
+    grp = (df["quote"].astype(str) + "|" + df["tank"].astype(str))
+    codes = pd.factorize(grp)[0]
+    n_groups = int(codes.max()) + 1
+
+    def grouped_noise(rho=0.93):
+        """A draw shared across revisions of the same tank, plus a small
+        per-revision perturbation. Each call is independent of the others, so
+        components vary separately while revisions stay near-duplicates."""
+        shared = rng.normal(0.0, 1.0, n_groups)[codes]
+        per_row = rng.normal(0.0, 1.0, n)
+        return rho * shared + np.sqrt(1 - rho ** 2) * per_row
+
+    combined = grouped_noise()
+    noise = combined * sigma * noise_scale
     # Argentina is the one genuine bias in the data
     ar_bias = np.where(df["country"].values == "AR", np.log(1.0 - 0.167), 0.0)
 
@@ -279,14 +297,14 @@ def generate(n_quotes=3018, target_rows=6892, seed=RNG_DEFAULT,
     material = (base_rate * steel * mat_mult * use_mult * deck_mult
                 * seis_mult * name_mult * np.exp(drift + ar_bias + noise))
     fabrication = (material / mat_mult ** 0.55) * np.exp(
-        rng.normal(-0.06, 0.09, n) * noise_scale) * 1.02
+        (-0.06 + 0.09 * grouped_noise()) * noise_scale) * 1.02
     construction = (shell_area * 24.0 * size_mult * wage_mult
-                    * np.exp(drift * 1.15 + rng.normal(0, 0.16, n) * noise_scale)
+                    * np.exp(drift * 1.15 + 0.16 * grouped_noise() * noise_scale)
                     * np.where(df["use"].values == "Waste Water Storage Tank", 1.18, 1.0))
-    insul_mat = shell_area * 11.5 * np.exp(drift + rng.normal(0, 0.17, n) * noise_scale)
-    insul_con = shell_area * 9.2 * wage_mult * np.exp(drift + rng.normal(0, 0.19, n) * noise_scale)
+    insul_mat = shell_area * 11.5 * np.exp(drift + 0.17 * grouped_noise() * noise_scale)
+    insul_con = shell_area * 9.2 * wage_mult * np.exp(drift + 0.19 * grouped_noise() * noise_scale)
     freight_p = (240.0 + df["miles"].values * 2.35 * np.sqrt(steel / 30000.0)
-                 ) * np.exp(drift * 0.8 + rng.normal(0, 0.22, n) * noise_scale)
+                 ) * np.exp(drift * 0.8 + 0.22 * grouped_noise() * noise_scale)
 
     material = np.maximum(material, 1200.0)
     fabrication = np.maximum(fabrication, 1000.0)
