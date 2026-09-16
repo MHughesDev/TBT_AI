@@ -1,6 +1,9 @@
+# Pin exact versions; the bundle records them and refuses to load under a
+# different scikit-learn major.minor (SPEC 5, 6.5 #MODEL).
 pandas>=2.0
 numpy>=1.24
 scikit-learn>=1.3
 joblib>=1.3
 openpyxl>=3.1
 xlwings>=0.30    # only needed for the Excel bridge
+pytest>=7.0      # tests only

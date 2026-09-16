@@ -20,3 +20,10 @@ __pycache__/
 .venv/
 venv/
 .DS_Store
+
+# Built model bundles and run outputs
+models/
+build_log.json
+RESULTS.md
+report*.txt
+increments.log
