@@ -50,3 +50,91 @@ The absolute thresholds in SPEC 6 were set for the REAL archive. On a different 
 | OPEN-4 blend weight w=1.0 (pure component sum) | mean -0.09 pts vs w=0.7; top5 -0.31 pts | ADOPTED w=1.0 (simpler; breakdown sums exactly) |
 | OPEN-5 Sales Manager as a feature | +0.05 pts; new-quote +0.07 pts | REJECTED by rule -> exclude |
 | B9 hyperparameter search (best: B9_lr0.02_it1800_leaf30) | +0.03 pts vs default | REJECTED by rule -> keep the default |
+
+## Verification
+
+### Test suite
+
+88 tests pass in 6m28s: the integrity tests (leakage, future-state leakage in
+fitted lookup tables, the quantity tripwire, filter symmetry, determinism,
+module shadowing, ledger ordering), the full refusal contract, the Excel
+surface, and the end-to-end command line paths.
+
+### What a random split reports here
+
+Same model, same data, three schemes:
+
+| scheme | n | mean APE | median | what it is |
+|---|---|---|---|---|
+| random K-fold | 6,689 | 5.89% | 3.28% | fiction: revision 2 trains, revision 3 tests |
+| GroupKFold by Quote # | 6,689 | 6.93% | 4.63% | honest about duplication, still sees the future |
+| **rolling origin (SPEC 3)** | 4,713 | **7.13%** | 4.71% | **the protocol** |
+
+A random split understates the error by 1.24 points here. On the real archive
+the documented gap is larger, roughly 3% against 8%, because its revisions are
+more tightly duplicated than this generator makes them. The direction and the
+mechanism are the same. This is why `tbt.protocol` exposes no random splitter
+and why a number from anywhere else must be rejected at review.
+
+### Retraining cadence
+
+Month-by-month forward test, which is what the deployment experiences:
+
+| cadence | mean APE | median | p90 | aggregate bias | CPU |
+|---|---|---|---|---|---|
+| never retrain | 7.08% | 5.05% | 13.83% | -1.50% | 21s |
+| quarterly | 6.84% | 4.66% | 13.01% | -1.40% | 60s |
+| **monthly** | **6.16%** | **3.69%** | **11.90%** | **-1.32%** | 138s |
+
+**Monthly retraining is worth 0.92 points against never retraining.** Every
+modelling change in the build sequence put together is worth 0.37 points
+(second ensemble variant 0.16, tank-name features 0.12, pure component sum
+0.09).
+
+That confirms the field notes' central deployment claim on this archive:
+cadence is the largest single lever, larger than every modelling change
+combined, and it costs about two minutes of CPU a month. The measured margin
+is 0.92 points against the 1.30 documented on the real archive: same finding,
+smaller magnitude, same conclusion. **Put the retrain on a schedule.**
+
+## What these numbers are, and are not
+
+The measured result is **7.17% mean APE against an irreducible floor of 4.56%**
+for this archive, a gap of 2.61 points.
+
+That floor is known exactly rather than estimated, because the archive was
+generated twice from identical random draws, once with the irreducible noise
+and once without. The distance to it is the transferable reading: it says the
+pipeline extracts most of the signal that exists and is not leaving obvious
+structure on the table.
+
+The 7.17% itself is **not** a prediction of accuracy on TBT's archive. It is a
+property of the noise this generator injects. The real number requires the real
+file:
+
+```bash
+python -m tbt backtest <real archive.csv> --report report.txt
+```
+
+Three specification predictions were falsified and are recorded rather than
+quietly dropped:
+
+- **Recency weighting** cost 0.07 points where 0.2 to 0.4 of gain was expected.
+  The likely cause here is that drift is smooth and the time feature already
+  carries it, so down-weighting old rows only discards data. The rule kept it
+  anyway, as written, because it costs one line.
+- **The size-dependent drift term** cost 0.19 points where 0.1 to 0.3 of gain
+  was expected, and won only 2 of 8 quarters.
+- **The hyperparameter surface is flat.** All four cells land within 0.03
+  points, so the search bought nothing. That is the expected shape for a low
+  learning rate on a noisy target, and it means effort belongs in features
+  rather than tuning.
+
+Two results do **not** transfer and must be re-run on the real archive:
+
+- **The steel-weight backbone term.** Its rule exists to repair a large-tank
+  underpricing problem documented at -13.9% on the real archive. This archive
+  showed -2.09% before the term was added, so there was nothing to repair and
+  the experiment had no purchase. Rejected here means untested, not refuted.
+- **The backbone-only baseline**, at 13.75% rather than the predicted 35-45%
+  median, because the generator makes geometry more learnable than reality.
