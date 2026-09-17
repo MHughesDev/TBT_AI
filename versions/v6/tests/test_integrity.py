@@ -189,3 +189,18 @@ def test_no_submodule_is_shadowed_by_a_package_export():
             raise AssertionError(
                 f"tbt.{mod.name} is a {type(attr).__name__}, not the module: a "
                 f"package export shadows the submodule of the same name")
+
+
+def test_all_nan_numeric_column_is_dropped_not_fatal(loaded):
+    """A numeric column absent from the export (or entirely NaN) must not kill
+    the fit. HistGradientBoosting's binner raises "window shape cannot be larger
+    than input array shape" on an all-NaN feature, and real exports are missing
+    `Miles to Site (From GT)`."""
+    df, mask, _ = loaded
+    d = df.copy()
+    d["Miles to Site (From GT)"] = np.nan
+    b = M.fit_bundle(d, mask, variants=FAST)
+    assert "miles_gt" in b.encoder.dropped_num
+    assert "miles_gt" not in b.encoder.columns
+    out = M.predict_frame(b, d.loc[mask].head(50))
+    assert (out["point"] > 0).all()

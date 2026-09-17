@@ -1,133 +1,136 @@
-# TBT Tank Pricing Estimator
+# TBT Tank Pricing
 
-Predicts what TBT would quote for a welded or bolted steel storage tank, from
-the tank's specification plus the commercial scope of the job.
+Predicts what TBT would quote for a steel tank, from its specifications.
+Trained on the TBT quote archive (Dec 2023 – Dec 2026, 6,892 rows / 3,018
+quotes).
 
-Two documents sit beside this one and they have different jobs:
+This repository holds **several complete, independent versions** of the system.
+They do not share code. Each folder under `versions/` is a standalone
+application: its own loader, features, model, CLI, Excel bridge, tests and
+documentation. You can delete any one of them without touching the others.
 
-- **`SPEC.md`** is the design and the reasoning. It is the authority. Every
-  module names the section it implements.
-- **`IMPLEMENTATION.md`** is the build record: what exists, how to run it, the
-  bugs found on the way, and an honest statement of what has and has not been
-  measured.
-
-`DESIGN.md` and `HANDOFF.md` are the prior investigation's field notes. They
-are evidence, not the plan.
+That is deliberate. Pricing models are judged by a single number, and the only
+honest way to choose between two designs is to run both on the same rows and
+compare. Shared code makes that comparison quietly dishonest — a "shared"
+feature module changes under one version when the other one needs it to.
 
 ---
 
-## The one thing to understand
+## The versions
 
-**The model prices scope. It does not guess scope.**
+| Folder | Architecture | Mean APE on the archive | Status |
+|---|---|---|---|
+| [`versions/v4`](versions/v4) | Six component GBMs on a ridge log-log backbone, 70/30 blend with a direct model | **8.5%** measured | Shipped, validated |
+| [`versions/v5`](versions/v5) | Computed shell-course physics, causal comparables kNN, quantile heads, mean-APE decision layer | **not measured** | Complete, unmeasured |
+| [`versions/v6`](versions/v6) | Six component models on a ridge log-log backbone, group-conditional conformal bands from a forward ledger, hard refusal contract | **not measured** | Complete, unmeasured |
 
-Whether a quote includes erection, insulation, freight or sales tax is a
-commercial decision the estimator already knows. It is not a property of the
-tank and it is not inferable from the specification. Every call states it:
+**v4 is the incumbent and the only version with a real number against its name.**
+v5 and v6 are complete systems, each built on a specific argument about where
+v4's remaining error lives. Neither argument has been tested against the archive,
+because the archive is customer data and is not in this repository.
 
-```python
-from tbt import QuoteInput, estimate, load_bundle
+v6's argument is about measurement rather than modelling: that the remaining
+error is mostly irreducible, that the expensive mistakes are validation mistakes
+which flatter a model rather than improve it, and that a system's refusals matter
+as much as its estimates. It ships a written specification (`versions/v6/SPEC.md`)
+whose open questions carry decision rules fixed before any data was seen, and a
+harness with no random-split entry point at all.
 
-est = estimate(QuoteInput(
-    diameter_ft=40, height_ft=36, material="CS",
-    use_type="Fire Protection Storage Tank", state="TX",
-    construction=True,          # do we erect it
-    insulation=True,            # is insulation supplied
-    insulation_erection=True,   # do we install it
-    freight=True,               # do we ship it
-    taxable=False,              # does sales tax apply to this customer
-), bundle=load_bundle("models"))
-```
+On *synthetic* data — which tests mechanics, not accuracy — v5 currently sits
+**behind** v4 on mean APE (6.7% against 6.6%) while cutting the large-tank
+aggregate bias by a third (−3.7% against −5.6%), at 2.4× the training time.
+Ablating v5's physics layer nearly doubles that bias, which is its central claim
+holding up. Do not deploy v5 over v4 until the bench has been run on the real
+file.
 
-Leave any of the five blank and you get `#SCOPE`, not a number. That is
-deliberate. A classifier in that position can only agree with what the
-estimator already knows, or be confidently wrong in a way that silently
-changes the price with nothing visible on the sheet.
+---
 
-Material and Fabrication carry no flag. They are present on every usable row:
-processes, not options.
-
-## Quick start
-
-```bash
-pip install -r requirements.txt
-
-# the real archive is not in this repo; generate a structurally faithful stand-in
-python tools/make_synthetic_archive.py archive.csv
-
-python -m tbt backtest archive.csv --report report.txt     # the only source of accuracy numbers
-python -m tbt train    archive.csv --out models --bootstrap-ledger
-python -m tbt predict  --diameter 32 --height 30 --material CS \
-        --use-type "Fire Protection Storage Tank" --state MO \
-        --construction yes --insulation no --insulation-erection no \
-        --freight yes --taxable no --out models
-python -m pytest tests -q
-```
-
-Everything runs on CPU. A full fit is about a minute on four cores; scoring a
-few thousand rows takes a couple of seconds. No GPU, no cloud, no network call
-anywhere in the code path.
-
-## What comes back
-
-A point estimate is not the product. Each call returns:
-
-| Field | What it is for |
-|---|---|
-| `point` | The conditional median. The number shown beside one quote. |
-| `book` | `point` corrected by a factor measured from forward residuals. Use this to sum a portfolio; the sum of medians is not the expected sum. |
-| `band80`, `band90` | Conformal bands, computed per segment, so commodity work gets a narrower range than engineered-to-order work. |
-| `components` | The six price lines. This is what makes a disagreement answerable: "check the construction line" rather than "this looks off". |
-| `tier` | A, B or C. Derived from the band width and the warnings, not fitted. |
-| `warnings` | Codes that must render on the sheet. A number with a hidden caveat is the failure mode this design exists to prevent. |
-
-## Retraining
+## Choosing between them
 
 ```bash
-python -m tbt train archive.csv --out models      # put this on a schedule
+pip install -r versions/v5/requirements.txt
+python bench/compare.py archive_prepared.csv
 ```
 
-The job scores the newly arrived rows with the **currently deployed** bundle,
-appends them to the ledger, and only then refits. That order is load-bearing.
-Reverse it and the ledger's residuals become in-sample: the prediction bands
-collapse to a fraction of their honest width and the portfolio correction
-drifts to one, while every number on the sheet still looks entirely plausible.
+`bench/compare.py` owns the rows and the folds. It loads the archive once,
+applies one filter, cuts one set of quarter boundaries, and hands every version
+exactly the same training mask and the same scoring mask. Each version supplies
+only a `fit(train) → estimates(test)` function.
 
-If the archive fails validation the job exits non-zero, the previous bundle
-stays deployed, and the reason is recorded. The loader rejects a bad file
-rather than repairing it.
+This matters more than it sounds. Every version ships its own validator and every
+one reports a number, but those numbers are not comparable: the versions disagree
+slightly about which rows are usable and about how the folds are cut. A
+comparison where the yardstick moves with the model is not a comparison.
 
-## For Excel
+The leaderboard sorts on **mean** absolute percentage error, which is what a
+portfolio of quotes actually experiences. Median is flattering — v4 reports 5.9%
+median against 8.5% mean — and should not be used to pick between versions.
+
+No archive to hand? `python bench/compare.py --synthetic` runs the whole thing on
+generated data. That proves the pipeline works. It is not an accuracy result.
+
+---
+
+## Facts that outrank every version
+
+These came out of the data, not out of any model, and they apply whichever
+version is running.
+
+**Retrain monthly.** Never-retrain 9.99% / quarterly 9.28% / monthly 8.69% mean.
+That 1.3-point gap is larger than every modelling change in this project
+combined, and it costs two minutes of CPU. If exactly one thing from this
+repository gets done, make it a scheduled task.
+
+**The model prices scope, it does not guess scope.** Whether a quote includes
+erection, insulation, freight or sales tax is a commercial decision the estimator
+already knows. Every version refuses rather than defaulting. This will
+be proposed again as a "fallback for blanks"; it will test at AUC 0.91–0.99, and
+it will silently change prices with nothing visible on the sheet.
+
+**Deploy the flag before the price.** At single-digit mean error no version
+can set prices, but each reliably catches a transposed dimension, a missing scope
+line or a forgotten stainless premium. Real money at almost no risk, and it
+builds the track record you would need before trusting anything further.
+
+**No win-rate model is possible.** `Status` is Won 173, Lost 142 out of 6,892 —
+under 5% resolved. That cannot support a model of what price wins, and no amount
+of modelling fixes it. It needs outcome capture first, which is a process change.
+
+**Never use a random train/test split.** 6,892 rows are only 3,018 quotes;
+revisions are near-duplicates. A random split reports about 3% instead of about
+8%, and the 3% is not real.
+
+---
+
+## Data
+
+The archive is not in this repository and should not be — it contains customer
+names, project names and real pricing. `*.csv` is gitignored.
+
+Every version expects a *prepared* archive, with five Yes/No scope columns added:
 
 ```bash
-xlwings addin install     # then Excel ribbon -> xlwings -> Import Functions
+python versions/v5/prepare_data.py archive.csv archive_prepared.csv
 ```
 
-Phase 1 ships `TBT_CHECK` and `TBT_MODEL_INFO` only. The breakdown and the
-point estimate are withheld until the check has earned them; `SPEC.md` section
-7.7 sets out the evidence that unlocks each phase. Functions are non-volatile
-and memoised, and anything over 500 rows returns `#BATCH` and points at the
-batch scorer, because Excel recalculates aggressively and per-cell inference
-will lock the workbook.
+That backfills scope by reading which components carry a non-zero price. It is
+the right migration for history and the wrong thing to rely on going forward: a
+blank price and a genuinely excluded scope look identical after the fact, and
+only the estimator knows which it was. Five Yes/No dropdowns at quote time is the
+fix, and they are the same five answers the model needs anyway.
 
-## Read this before anyone quotes off it
+---
 
-**No real-world accuracy number is claimed here.** The archive this was built
-for is not in the repository, so every number produced during the build comes
-from a synthetic stand-in. `IMPLEMENTATION.md` says exactly what that does and
-does not establish. Run the backtest against the real file and quote that.
+## Adding a version
 
-**Quote the mean, never the median.** The median flatters this problem by
-roughly two and a half points. The mean is what a book of work experiences.
+1. `mkdir versions/v7` and build it. Copy from an existing version or start
+   clean — do not import across version folders.
+2. Give it a `fit(train_df) → estimates(test_df)` entry point.
+3. Add an adapter to `bench/compare.py` and register it in `entrants`.
+4. Run the bench. If it does not win on mean APE, say so in its own `DESIGN.md`
+   rather than deleting it — a version that lost is a result, and the next person
+   needs to know it was tried.
 
-**It models what TBT quotes, not what wins.** Fewer than five percent of rows
-have a resolved outcome. There is no win-rate model here, the data cannot
-support one, and the API has no field that looks like one.
-
-**Treat the largest quotes as a floor.** Large tanks scale superlinearly and
-the available columns do not fully explain it. Every prediction in the top
-band carries a warning.
-
-**The first use is a check, not an oracle.** The model is not good enough to
-set prices. It is good enough to catch a transposed dimension, a missing scope
-line or a forgotten stainless premium, and that is real money at almost no
-risk.
+`versions/v5/DESIGN.md` §8 is a worked example of the last point: it states in
+advance what result would falsify each of v5's claims, so the bench run is a test
+rather than a search for confirmation.

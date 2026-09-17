@@ -267,10 +267,27 @@ class Encoder:
         self.cat = categorical_features(use_sales_manager, use_names)
         self.scope = list(C.SCOPE_FEATURES)
         self.vocab: dict[str, list[str]] = {}
+        self.dropped_num: list[str] = []
         self.columns = self.num + self.scope + self.cat
 
     def fit(self, df: pd.DataFrame) -> "Encoder":
         assert_no_banned(self.columns)
+
+        # A numeric column that is entirely absent or entirely NaN in the
+        # training window kills HistGradientBoosting: its binner raises
+        # "window shape cannot be larger than input array shape" on an all-NaN
+        # feature. Real exports do this -- `Miles to Site (From GT)` is missing
+        # from some of them -- so the column is dropped at fit time and stays
+        # dropped at inference, rather than crashing the whole fit.
+        self.dropped_num = []
+        for c in list(self.num):
+            col = pd.to_numeric(df[c], errors="coerce") if c in df.columns else None
+            if col is None or not np.isfinite(col.to_numpy(dtype=float)).any():
+                self.dropped_num.append(c)
+        if self.dropped_num:
+            self.num = [c for c in self.num if c not in self.dropped_num]
+            self.columns = self.num + self.scope + self.cat
+
         self.vocab = {}
         for c in self.cat:
             vals = df[c].astype(object) if c in df.columns else pd.Series([], dtype=object)

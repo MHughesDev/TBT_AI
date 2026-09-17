@@ -1,8 +1,9 @@
-# Trained bundle — 34 MB. Rebuild with:
-#   python tbt_model.py train <prepared.csv> --fast
-# It is a build artifact: it changes on every monthly retrain, and git stores each
-# version in full since binaries do not delta. Use Releases or Git LFS if you need
-# it versioned.
+# Trained bundles — tens of MB. Rebuild with each version's own train command:
+#   versions/v4:  python tbt_model.py train <prepared.csv> --fast
+#   versions/v5:  python cli.py train <prepared.csv> --fast
+# They are build artifacts: they change on every monthly retrain, and git stores
+# each version in full since binaries do not delta. Use Releases or Git LFS if
+# you need them versioned.
 *.joblib
 
 # Data — contains customer names, project names and real pricing. Do not commit.
@@ -13,6 +14,7 @@
 audit*.xlsx
 scored*.xlsx
 *_prepared.csv
+synthetic_archive.csv
 *.log
 
 __pycache__/
