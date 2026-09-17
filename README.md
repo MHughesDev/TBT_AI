@@ -22,11 +22,19 @@ feature module changes under one version when the other one needs it to.
 |---|---|---|---|
 | [`versions/v4`](versions/v4) | Six component GBMs on a ridge log-log backbone, 70/30 blend with a direct model | **8.5%** measured | Shipped, validated |
 | [`versions/v5`](versions/v5) | Computed shell-course physics, causal comparables kNN, quantile heads, mean-APE decision layer | **not measured** | Complete, unmeasured |
+| [`versions/v6`](versions/v6) | Six component models on a ridge log-log backbone, group-conditional conformal bands from a forward ledger, hard refusal contract | **not measured** | Complete, unmeasured |
 
 **v4 is the incumbent and the only version with a real number against its name.**
-v5 is a complete system built on a specific argument about where v4's remaining
-error lives. That argument has not been tested against the archive, because the
-archive is customer data and is not in this repository.
+v5 and v6 are complete systems, each built on a specific argument about where
+v4's remaining error lives. Neither argument has been tested against the archive,
+because the archive is customer data and is not in this repository.
+
+v6's argument is about measurement rather than modelling: that the remaining
+error is mostly irreducible, that the expensive mistakes are validation mistakes
+which flatter a model rather than improve it, and that a system's refusals matter
+as much as its estimates. It ships a written specification (`versions/v6/SPEC.md`)
+whose open questions carry decision rules fixed before any data was seen, and a
+harness with no random-split entry point at all.
 
 On *synthetic* data — which tests mechanics, not accuracy — v5 currently sits
 **behind** v4 on mean APE (6.7% against 6.6%) while cutting the large-tank
@@ -75,12 +83,12 @@ repository gets done, make it a scheduled task.
 
 **The model prices scope, it does not guess scope.** Whether a quote includes
 erection, insulation, freight or sales tax is a commercial decision the estimator
-already knows. Both versions raise `ScopeError` rather than defaulting. This will
+already knows. Every version refuses rather than defaulting. This will
 be proposed again as a "fallback for blanks"; it will test at AUC 0.91–0.99, and
 it will silently change prices with nothing visible on the sheet.
 
-**Deploy the flag before the price.** At single-digit mean error neither version
-can set prices, but both reliably catch a transposed dimension, a missing scope
+**Deploy the flag before the price.** At single-digit mean error no version
+can set prices, but each reliably catches a transposed dimension, a missing scope
 line or a forgotten stainless premium. Real money at almost no risk, and it
 builds the track record you would need before trusting anything further.
 
@@ -99,7 +107,7 @@ revisions are near-duplicates. A random split reports about 3% instead of about
 The archive is not in this repository and should not be — it contains customer
 names, project names and real pricing. `*.csv` is gitignored.
 
-Both versions expect a *prepared* archive, with five Yes/No scope columns added:
+Every version expects a *prepared* archive, with five Yes/No scope columns added:
 
 ```bash
 python versions/v5/prepare_data.py archive.csv archive_prepared.csv
@@ -115,7 +123,7 @@ fix, and they are the same five answers the model needs anyway.
 
 ## Adding a version
 
-1. `mkdir versions/v6` and build it. Copy from an existing version or start
+1. `mkdir versions/v7` and build it. Copy from an existing version or start
    clean — do not import across version folders.
 2. Give it a `fit(train_df) → estimates(test_df)` entry point.
 3. Add an adapter to `bench/compare.py` and register it in `entrants`.

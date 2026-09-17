@@ -30,6 +30,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 V4 = ROOT / "versions" / "v4"
 V5 = ROOT / "versions" / "v5"
+V6 = ROOT / "versions" / "v6"
 
 
 # ------------------------------------------------------------------ adapters
@@ -82,6 +83,26 @@ def v5_adapter(d5, objective="mape", **kw):
     def score(tr_mask, te_mask):
         m = TBT5(objective=objective, **kw).fit(d5[tr_mask].copy(), verbose=False)
         return m.estimate(d5[te_mask].copy())["estimate"]
+
+    return score
+
+
+def v6_adapter(d5):
+    """v6: six component models, each a ridge log-log backbone plus a
+    gradient-boosted residual ensemble, summed over the scope the caller states.
+
+    v6 requires the five scope booleans and refuses without them; the shared
+    loader has already validated that those columns agree with which components
+    carry a price, so the bench rows satisfy that contract by construction.
+    """
+    sys.path.insert(0, str(V6))
+    from tbt import model as v6model
+
+    d6 = d5.copy().reset_index(drop=True)
+
+    def score(tr_mask, te_mask):
+        b = v6model.fit_bundle(d6, pd.Series(tr_mask, index=d6.index))
+        return v6model.predict_frame(b, d6.loc[te_mask]).loc[:, "point"].values
 
     return score
 
@@ -184,6 +205,7 @@ def main():
                                               with_physics=False),
         "v5 ablation: no comparables": v5_adapter(d5, objective="mape",
                                                   with_comparables=False),
+        "v6 component GBM + conformal": v6_adapter(d5),
     }
     if a.only:
         want = {s.strip() for s in a.only.split(",")}
